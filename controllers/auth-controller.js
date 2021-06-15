@@ -5,8 +5,21 @@ const saltRounds = 10;
 
 const HttpError = require("../models/http-error");
 const User = require("../models/user");
-const Rooms = require("../models/chat-room");
+const Room = require("../models/chat-room");
 const util = require("../utils/generate-token");
+
+//?---------------Get All Users------------------------
+const getUsers = async (req, res, next) => {
+	let users;
+	try {
+		users = await User.find({}, "-password");
+	} catch (err) {
+		const error = new HttpError("Couldn't get all users", 500);
+		return next(error);
+	}
+	res.send(users);
+};
+//?---------------------------------------------------------
 
 //?---------------Register New User---------------------
 
@@ -45,6 +58,7 @@ const register = async (req, res, next) => {
 				phone,
 				rooms: [],
 				password: hash,
+				is_active: true,
 			});
 
 			try {
@@ -61,8 +75,8 @@ const register = async (req, res, next) => {
 					name: user.name,
 					phone: user.phone,
 					email: user.email,
+					isActive: user.is_active,
 				},
-				rooms: [],
 				token: token,
 			});
 		}
@@ -76,7 +90,7 @@ const register = async (req, res, next) => {
 
 const login = async (req, res, next) => {
 	let token;
-	let userRooms = [];
+	let rooms;
 	const { email, password } = req.body;
 	try {
 		await User.findOne({ email: email }, (err, foundUser) => {
@@ -86,8 +100,10 @@ const login = async (req, res, next) => {
 					bcrypt.compare(password, foundUser.password, async (e, result) => {
 						if (result === true) {
 							token = util.genToken(foundUser);
-							userRooms = await Rooms.find({
+							rooms = await Room.find({
 								participants: foundUser._id,
+							}).sort({
+								updatedAt: "descending",
 							});
 							res.send({
 								message: "Login Successful",
@@ -96,9 +112,10 @@ const login = async (req, res, next) => {
 									name: foundUser.name,
 									email: foundUser.email,
 									phone: foundUser.phone,
+									isActive: foundUser.is_active,
 								},
-								rooms: userRooms,
-								token: token,
+								rooms,
+								token,
 							});
 						} else if (e) {
 							const error = new HttpError(
@@ -121,3 +138,4 @@ const login = async (req, res, next) => {
 
 exports.register = register;
 exports.login = login;
+exports.getUsers = getUsers;

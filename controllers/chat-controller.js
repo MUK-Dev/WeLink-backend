@@ -11,36 +11,16 @@ const io = require("../socket");
 //* 2) Sending New Message in chat room
 //* 3) Getting All Messages of a chat room
 
-//?---------------Register New User---------------------
+//?---------------Create New Chat---------------------
 
-const createNewRoom = async (req, res, next) => {
-	const { title, participants } = req.body;
-	let chatRooms;
-
-	// !Check if the conversation between two users exist
-
-	try {
-		if (!title) {
-			chatRooms = await Room.findOne({ participants: { $eq: participants } });
-		}
-	} catch (err) {
-		const error = new HttpError("Couldn't Create Chat Room", 500);
-		return next(error);
-	}
-	if (chatRooms) {
-		const error = new HttpError("Chat Room Already Exists", 400);
-		return next(error);
-	}
-
-	// !--------------------------------------------------------
-
+const createNewRoom = async (title, participants, sender, text, res, next) => {
 	// !Creating a group chat if title is sent from the backend
 
 	let users = [];
 	try {
 		users = await User.find({ _id: { $in: participants } });
 	} catch (err) {
-		const error = new HttpError("Couldn't create chat room", 500);
+		const error = new HttpError("Couldn't create chat room 1", 500);
 		return next(error);
 	}
 
@@ -50,6 +30,18 @@ const createNewRoom = async (req, res, next) => {
 			participants,
 			messages: [],
 		});
+		const message = Message({
+			sender,
+			text,
+			roomId: chatRoom,
+		});
+		try {
+			await message.save();
+		} catch (err) {
+			console.log(err);
+			const error = new HttpError("Couldn't send Message", 500);
+			return next(error);
+		}
 		try {
 			const sess = await mongoose.startSession();
 			sess.startTransaction();
@@ -58,10 +50,30 @@ const createNewRoom = async (req, res, next) => {
 				{ _id: { $in: participants } },
 				{ $push: { rooms: chatRoom } }
 			);
-			res.send("Successfully Created New Chat Room");
 			await sess.commitTransaction();
 		} catch (err) {
-			const error = new HttpError("Couldn't Create New Chat Room", 500);
+			const error = new HttpError("Couldn't Create New Chat Room 2", 500);
+			return next(error);
+		}
+		try {
+			await Room.findByIdAndUpdate(chatRoom._id, {
+				$push: { messages: message },
+			});
+		} catch (err) {
+			console.log(err);
+			const error = new HttpError("Couldn't Create New Chat Room 2.5", 500);
+			return next(error);
+		}
+		try {
+			let foundRoom = await Room.findById(chatRoom._id);
+			io.getIO().emit("newChat", {
+				participants: foundRoom.participants,
+				foundRoom,
+			});
+			res.send("Successfully Created New Chat Room");
+		} catch (err) {
+			console.log(err);
+			const error = new HttpError("Couldn't Create New Chat Room 3.5", 500);
 			return next(error);
 		}
 		// !Creating Two Persons chat if title is not sent from the backend
@@ -70,6 +82,19 @@ const createNewRoom = async (req, res, next) => {
 			participants,
 			messages: [],
 		});
+		const message = Message({
+			sender,
+			text,
+			roomId: chatRoom,
+		});
+		try {
+			await message.save();
+		} catch (err) {
+			console.log(err);
+			const error = new HttpError("Couldn't send Message", 500);
+			return next(error);
+		}
+
 		try {
 			const sess = await mongoose.startSession();
 			sess.startTransaction();
@@ -78,14 +103,37 @@ const createNewRoom = async (req, res, next) => {
 				{ _id: { $in: participants } },
 				{ $push: { rooms: chatRoom } }
 			);
-			res.send("Successfully Created New Chat Room");
 			await sess.commitTransaction();
 		} catch (err) {
-			const error = new HttpError("Couldn't Create New Chat Room", 500);
+			console.log(err);
+			const error = new HttpError("Couldn't Create New Chat Room 3", 500);
+			return next(error);
+		}
+		try {
+			await Room.findByIdAndUpdate(chatRoom._id, {
+				$push: { messages: message },
+			});
+		} catch (err) {
+			console.log(err);
+			const error = new HttpError("Couldn't Create New Chat Room 3.5", 500);
+			return next(error);
+		}
+		try {
+			let foundRoom = await Room.findById(chatRoom._id);
+			//!Emit the newly created chat room from here to send it to participants of the room
+			io.getIO().emit("newChat", {
+				participants: foundRoom.participants,
+				foundRoom,
+			});
+
+			res.send("Successfully Created New Chat Room");
+		} catch (err) {
+			console.log(err);
+			const error = new HttpError("Couldn't Create New Chat Room 3.5", 500);
 			return next(error);
 		}
 	} else {
-		const error = new HttpError("Couldn't Create New Chat Room", 500);
+		const error = new HttpError("Couldn't Create New Chat Room 4", 500);
 		return next(error);
 	}
 
@@ -97,14 +145,21 @@ const createNewRoom = async (req, res, next) => {
 //?----------------------Adding New Message-----------------
 
 const newMessage = async (req, res, next) => {
-	const { sender, text, roomId } = req.body;
+	const { sender, text, roomId, participants, title } = req.body;
 	let chat;
+	// !Check if the conversation between two users exist
+
 	try {
-		chat = await Room.findById(roomId);
+		if (!title) {
+			chat = await Room.findById(roomId);
+		}
 	} catch (err) {
-		const error = new HttpError("Couldn't send message", 500);
+		const error = new HttpError("Couldn't Send Message", 500);
 		return next(error);
 	}
+
+	// !--------------------------------------------------------
+
 	if (chat) {
 		const message = Message({
 			sender,
@@ -116,13 +171,15 @@ const newMessage = async (req, res, next) => {
 			sess.startTransaction();
 			await message.save({ session: sess });
 			await Room.findByIdAndUpdate(roomId, { $push: { messages: message } });
-			io.getIO().emit("message", { action: "newMessage", message: message });
+			io.getIO().emit("newMessage", { roomId, message });
 			res.send("Message Sent");
 			await sess.commitTransaction();
 		} catch (err) {
 			const error = new HttpError("Couldn't send message", 500);
 			return next(error);
 		}
+	} else {
+		await createNewRoom(title, participants, sender, text, res, next);
 	}
 };
 
@@ -146,6 +203,5 @@ const getMessages = async (req, res, next) => {
 
 //?----------------------------------------------------------------------
 
-exports.createNewRoom = createNewRoom;
 exports.newMessage = newMessage;
 exports.getMessages = getMessages;
